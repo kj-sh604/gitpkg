@@ -1,0 +1,14 @@
+gitpkg
+------
+
+just a helper script that "git clones" the PKGBUILD of Arch Linux packages in the official repos.
+
+------
+
+usage:
+    gitpkg [-h|--help]
+    gitpkg <package name> <package name>...
+
+options:
+    -h, --help
+        print a help message
