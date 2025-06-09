@@ -1,0 +1,60 @@
+#!/bin/sh
+
+check_git_installed() {
+    if ! command -v git >/dev/null 2>&1; then
+        echo "error: git is not installed :( please git wget to use $0."
+        exit 1
+    fi
+}
+
+_base_url='https://gitlab.archlinux.org/archlinux/packaging/packages'
+
+get_url_function() {
+    _pkg="$1"
+    _url="${_base_url}/${_pkg}.git"
+
+    echo "$_url"
+}
+
+run_grabber_function() {
+    _pkg="$(echo "$1" | tr -d '[:space:]')"
+    _url="$(get_url_function "$_pkg")"
+
+    git clone "$_url"
+}
+
+grabber_function() {
+    for _pkg in "$@"; do
+        run_grabber_function "$_pkg" &
+    done
+    wait
+}
+
+usage_function() {
+    cat <<EOF
+usage:
+    $0 [-h|--help]
+    $0 <pkg> <pkg>...
+
+options:
+    -h, --help
+        print this help message
+EOF
+}
+
+check_git_installed
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        -*)
+            usage_function
+            exit 0
+            ;;
+        *)
+            grabber_function "$@"
+            exit 0
+            ;;
+    esac
+done
+
+# vim: set filetype=sh foldmethod=marker foldlevel=0:
