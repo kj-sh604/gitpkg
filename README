@@ -1,7 +1,8 @@
 gitpkg
 ------
 
-just a helper script that "git clones" the PKGBUILD of Arch Linux packages in the official repos.
+simple POSIX helper script that grabs the PKGBUILD of Arch Linux packages (in
+the official repos) via `git`.
 
 ------
 
