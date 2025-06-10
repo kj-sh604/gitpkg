@@ -1,14 +1,17 @@
-gitpkg
+gitpkg/gitaur
 ------
 
-simple POSIX helper script that grabs the PKGBUILD of Arch Linux packages (in
-the official repos) via `git`.
+simple POSIX helper scripts that grabs the PKGBUILD of Arch Linux packages via
+`git`.
+
+gitpkg = grabs PKGBUILDs from the Official Arch Repositories
+gitaur = grabs PKGBUILDs from the Arch User Repository
 
 ------
 
 usage:
-    gitpkg [-h|--help]
-    gitpkg <package name> <package name>...
+    $0 [-h|--help]
+    $0 <package name> <package name>...
 
 options:
     -h, --help
