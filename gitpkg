@@ -1,31 +1,196 @@
 #!/bin/sh
 
-check_git_installed() {
-    if ! command -v git >/dev/null 2>&1; then
-        echo "error: git is not installed :( please git wget to use $0."
-        exit 1
+# check deps
+check_deps_function() {
+    for _dep in git curl jq; do
+        if ! command -v "$_dep" >/dev/null 2>&1; then
+            echo "error: $_dep is not installed :( please install $_dep to use $0." >&2
+            exit 1
+        fi
+    done
+}
+
+# urls
+_official_search='https://archlinux.org/packages/search/json'
+_official_git='https://gitlab.archlinux.org/archlinux/packaging/packages'
+_official_project_api='https://gitlab.archlinux.org/api/v4/projects/archlinux%2Fpackaging%2Fpackages'
+_aur_rpc='https://aur.archlinux.org/rpc'
+_aur_git='https://aur.archlinux.org'
+
+# helpers
+url_encode_function() {
+    printf '%s' "$1" | jq -sRr @uri
+}
+
+cleanup_function() {
+    if [ -n "$_workdir" ] && [ -d "$_workdir" ]; then
+        rm -rf "$_workdir"
     fi
 }
 
-_base_url='https://gitlab.archlinux.org/archlinux/packaging/packages'
-
-get_url_function() {
-    _pkg="$1"
-    _url="${_base_url}/${_pkg}.git"
-
-    echo "$_url"
+keyboard_cancel() {
+    printf "\ncanceled. exiting...\n"
+    exit 130
 }
 
-run_grabber_function() {
-    _pkg="$(echo "$1" | tr -d '[:space:]')"
-    _url="$(get_url_function "$_pkg")"
+# source lookups
+# official lookup, prints repo and pkgbase or nothing
+get_official_function() {
+    _pkg="$1"
+    _resp="$(curl -fsSL "${_official_search}/?name=$(url_encode_function "$_pkg")")" || return 1
+    printf '%s' "$_resp" | jq -r --arg pkg "$_pkg" '[.results[] | select(.pkgname == $pkg)][0] | select(. != null) | "\(.repo) \(.pkgbase // .pkgname)"'
+}
+
+# official last git activity, prints YYYY-MM-DD or nothing
+get_official_date_function() {
+    _base="$1"
+    _resp="$(curl -fsSL "${_official_project_api}/$(url_encode_function "$_base")/repository/commits?per_page=1")" || return 1
+    printf '%s' "$_resp" | jq -r '.[0].committed_date // empty' | cut -c1-10
+}
+
+# aur lookup, prints pkgbase and LastModified epoch or nothing
+get_aur_function() {
+    _pkg="$1"
+    _resp="$(curl -fsSL "${_aur_rpc}/?v=5&type=info&arg[]=$(url_encode_function "$_pkg")")" || return 1
+    printf '%s' "$_resp" | jq -r --arg pkg "$_pkg" '[.results[] | select(.Name == $pkg)][0] | select(. != null) | "\(.PackageBase // .Name) \(.LastModified)"'
+}
+
+# resolver
+# writes 5 lines to $_out: official repo, official base, official date,
+# aur base, aur date
+resolve_function() {
+    _pkg="$1"
+    _out="$2"
+
+    _official="$(get_official_function "$_pkg")"
+    _official_repo="${_official%% *}"
+    _official_base="${_official#* }"
+    _official_date=''
+
+    _aur="$(get_aur_function "$_pkg")"
+    _aur_base="${_aur%% *}"
+    _aur_epoch="${_aur#* }"
+    _aur_date=''
+
+    if [ -n "$_official_repo" ] && [ -n "$_aur_base" ]; then
+        _official_date="$(get_official_date_function "$_official_base")"
+        [ -n "$_official_date" ] || _official_date='unknown'
+        case "$_aur_epoch" in
+            ''|*[!0-9]*)
+                _aur_date='unknown'
+                ;;
+            *)
+                _aur_date="$(date -u -d "@${_aur_epoch}" +%F 2>/dev/null)"
+                [ -n "$_aur_date" ] || _aur_date='unknown'
+                ;;
+        esac
+    fi
+
+    {
+        printf '%s\n' "$_official_repo"
+        printf '%s\n' "$_official_base"
+        printf '%s\n' "$_official_date"
+        printf '%s\n' "$_aur_base"
+        printf '%s\n' "$_aur_date"
+    } > "$_out"
+}
+
+# picker
+# prints official or aur, returns 1 when nothing was picked
+pick_source_function() {
+    _pkg="$1"
+    _repo="$2"
+    _official_date="$3"
+    _aur_date="$4"
+
+    _official_line="${_pkg} (${_repo}) [Last Git Activity: ${_official_date}]"
+    _aur_line="${_pkg} (AUR) [Last Git Activity: ${_aur_date}]"
+
+    if command -v fzf >/dev/null 2>&1; then
+        _pick="$(printf '%s\n%s\n' "$_official_line" "$_aur_line" | fzf --prompt='source > ' --height=10)" || return 1
+    else
+        printf '1) %s\n' "$_official_line" >&2
+        printf '2) %s\n' "$_aur_line" >&2
+        printf 'pick a source [1/2]: ' >&2
+        read -r _answer
+        case "$_answer" in
+            1) _pick="$_official_line" ;;
+            2) _pick="$_aur_line" ;;
+            *) return 1 ;;
+        esac
+    fi
+
+    case "$_pick" in
+        '') return 1 ;;
+        *'(AUR)'*) printf 'aur\n' ;;
+        *) printf 'official\n' ;;
+    esac
+}
+
+# cloner
+clone_function() {
+    _base="$1"
+    _source="$2"
+
+    case "$_source" in
+        official) _url="${_official_git}/${_base}.git" ;;
+        aur) _url="${_aur_git}/${_base}.git" ;;
+    esac
 
     git clone "$_url"
 }
 
+# main grabber
 grabber_function() {
+    _workdir="$(mktemp -d)" || exit 1
+
     for _pkg in "$@"; do
-        run_grabber_function "$_pkg" &
+        _pkg="$(printf '%s' "$_pkg" | tr -d '[:space:]')"
+        [ -n "$_pkg" ] || continue
+        resolve_function "$_pkg" "${_workdir}/${_pkg}" &
+    done
+    wait
+
+    for _pkg in "$@"; do
+        _pkg="$(printf '%s' "$_pkg" | tr -d '[:space:]')"
+        [ -n "$_pkg" ] || continue
+        _file="${_workdir}/${_pkg}"
+
+        _official_repo=''
+        _official_base=''
+        _official_date=''
+        _aur_base=''
+        _aur_date=''
+        if [ -f "$_file" ]; then
+            {
+                read -r _official_repo
+                read -r _official_base
+                read -r _official_date
+                read -r _aur_base
+                read -r _aur_date
+            } < "$_file"
+        fi
+
+        if [ -n "$_official_repo" ] && [ -n "$_aur_base" ]; then
+            _source="$(pick_source_function "$_pkg" "$_official_repo" "$_official_date" "$_aur_date")" || _source=''
+            _base="$_official_base"
+            [ "$_source" = 'aur' ] && _base="$_aur_base"
+        elif [ -n "$_official_repo" ]; then
+            _source='official'
+            _base="$_official_base"
+        elif [ -n "$_aur_base" ]; then
+            _source='aur'
+            _base="$_aur_base"
+        else
+            echo "error: $_pkg not found in official repos or aur" >&2
+            _failed=1
+            continue
+        fi
+
+        case "$_source" in
+            official|aur) clone_function "$_base" "$_source" & ;;
+            *) echo "warning: skipped $_pkg, no source picked" >&2 ;;
+        esac
     done
     wait
 }
@@ -36,24 +201,31 @@ usage:
     $0 [-h|--help]
     $0 <pkg> <pkg>...
 
+pulls the PKGBUILD of each package via git from the official arch repos or
+the aur, and asks which source to use when a name exists in both
+
 options:
     -h, --help
         print this help message
 EOF
 }
 
-check_git_installed
+_failed=0
+_workdir=''
+trap cleanup_function EXIT
+trap keyboard_cancel INT
+
+check_deps_function
+
+if [ $# -eq 0 ]; then
+    usage_function
+    exit 0
+fi
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        -*)
-            usage_function
-            exit 0
-            ;;
-        *)
-            grabber_function "$@"
-            exit 0
-            ;;
+        -*) usage_function; exit 0 ;;
+        *) grabber_function "$@"; exit "$_failed" ;;
     esac
 done
 

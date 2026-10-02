@@ -1,18 +1,42 @@
-gitpkg/gitaur
+gitpkg
 ------
 
-simple POSIX helper scripts that grabs the PKGBUILD of Arch Linux packages via
-`git`.
+Simple POSIX helper script that grabs the PKGBUILD of Arch Linux packages via
+`git`, from either the official Arch repositories or the AUR.
 
-gitpkg = grabs PKGBUILDs from the Official Arch Repositories
-gitaur = grabs PKGBUILDs from the Arch User Repository
+Most packages exist in only one of the two sources, so gitpkg checks both and
+clones from the one that has it. When a name exists in both, gitpkg shows the
+last git activity of each candidate and asks which source to use:
 
+    librewolf (extra) [Last Git Activity: 2026-09-30]
+    librewolf (AUR) [Last Git Activity: 2024-12-01]
+
+This makes it easy to tell which source is actually newer, like when a package
+moved from the AUR to the repos. The picker uses `fzf` when it is installed,
+and falls back to a numbered prompt otherwise.
+
+dependencies
+------------
+
+`git`, `curl`, and `jq` are required. `fzf` is optional.
+
+install
+-------
+
+    make install
+
+remove
 ------
 
-usage:
-    $0 [-h|--help]
-    $0 <package name> <package name>...
+    make remove
 
-options:
-    -h, --help
-        print a help message
+usage
+-----
+
+    gitpkg [-h|--help]
+    gitpkg <package name> <package name>...
+
+license
+-------
+
+0BSD
